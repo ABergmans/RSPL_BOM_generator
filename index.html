@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PartsFinder Pro - Grootkeuken Spare Parts Analyse (C) AB</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- SheetJS for Excel Export -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    
+    <!-- PDF.js for PDF parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="css/style.css">
+    
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    
+    <!-- Header -->
+    <header class="bg-gradient-to-r from-blue-600 to-blue-800 text-white shadow-lg">
+        <div class="container mx-auto px-4 py-6">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <i class="fas fa-cogs text-4xl"></i>
+                    <div>
+                        <h1 class="text-3xl font-bold">PartsFinder Pro</h1>
+                        <p class="text-blue-200 text-sm">Grootkeuken Spare Parts Analyse & BOM/RSPL Generator</p>
+                    </div>
+                </div>
+                <button id="settingsBtn" class="bg-blue-700 hover:bg-blue-600 px-4 py-2 rounded-lg transition-colors">
+                    <i class="fas fa-cog mr-2"></i>API Instellingen
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="bg-white shadow-md">
+        <div class="container mx-auto px-4">
+            <div class="flex space-x-1">
+                <button class="tab-btn active px-6 py-4 font-semibold border-b-4 border-blue-600 text-blue-600 hover:bg-gray-50 transition-colors" data-tab="search">
+                    <i class="fas fa-search mr-2"></i>Zoeken
+                </button>
+                <button class="tab-btn px-6 py-4 font-semibold border-b-4 border-transparent text-gray-600 hover:bg-gray-50 transition-colors" data-tab="upload">
+                    <i class="fas fa-upload mr-2"></i>Upload PDF
+                </button>
+                <button class="tab-btn px-6 py-4 font-semibold border-b-4 border-transparent text-gray-600 hover:bg-gray-50 transition-colors" data-tab="analysis">
+                    <i class="fas fa-chart-line mr-2"></i>Analyse
+                </button>
+                <button class="tab-btn px-6 py-4 font-semibold border-b-4 border-transparent text-gray-600 hover:bg-gray-50 transition-colors" data-tab="generate">
+                    <i class="fas fa-file-excel mr-2"></i>Genereer Export
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="container mx-auto px-4 py-8">
+        
+        <!-- API Settings Modal -->
+        <div id="settingsModal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+            <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-xl font-bold text-gray-800">
+                        <i class="fas fa-key text-blue-600 mr-2"></i>API Instellingen
+                    </h3>
+                    <button id="closeSettingsBtn" class="text-gray-500 hover:text-gray-700">
+                        <i class="fas fa-times text-xl"></i>
+                    </button>
+                </div>
+                
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            Cohere API Key
+                            <a href="https://cohere.com" target="_blank" class="text-blue-600 hover:underline ml-2">
+                                <i class="fas fa-external-link-alt text-xs"></i> Gratis aanmaken
+                            </a>
+                        </label>
+                        <input type="password" id="cohereApiKey" 
+                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                               placeholder="Voer je Cohere API key in">
+                    </div>
+                    
+                    <div class="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                        <p class="text-sm text-blue-800">
+                            <i class="fas fa-info-circle mr-2"></i>
+                            <strong>Gratis API Key:</strong> Registreer op cohere.com voor een gratis trial key met 100+ calls per minuut.
+                        </p>
+                    </div>
+                    
+                    <button id="saveApiKeyBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors">
+                        <i class="fas fa-save mr-2"></i>Opslaan
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Search Tab -->
+        <div id="search-tab" class="tab-content">
+            <div class="bg-white rounded-lg shadow-md p-8">
+                <h2 class="text-2xl font-bold text-gray-800 mb-6">
+                    <i class="fas fa-search text-blue-600 mr-2"></i>
+                    Zoek Parts List Online
+                </h2>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            Merk / Fabrikant
+                        </label>
+                        <input type="text" id="brandInput" 
+                               class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                               placeholder="bijv. Rational, Electrolux, Convotherm">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            Type / Model
+                        </label>
+                        <input type="text" id="modelInput" 
+                               class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                               placeholder="bijv. SCC 101, AOS061EAH1">
+                    </div>
+                </div>
+                
+                <button id="searchBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition-colors shadow-md hover:shadow-lg">
+                    <i class="fas fa-search mr-2"></i>Zoek Parts List & Analyseer
+                </button>
+                
+                <div id="searchResults" class="mt-6 hidden">
+                    <div class="bg-green-50 border border-green-200 rounded-lg p-4">
+                        <h3 class="text-lg font-semibold text-green-800 mb-2">
+                            <i class="fas fa-check-circle mr-2"></i>Zoekresultaten
+                        </h3>
+                        <div id="searchResultsContent" class="text-gray-700"></div>
+                    </div>
+                </div>
+                
+                <div id="searchLoading" class="mt-6 hidden">
+                    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center">
+                        <i class="fas fa-spinner fa-spin text-3xl text-blue-600 mb-2"></i>
+                        <p class="text-blue-800 font-medium">Zoeken en analyseren...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Upload Tab -->
+        <div id="upload-tab" class="tab-content hidden">
+            <div class="bg-white rounded-lg shadow-md p-8">
+                <h2 class="text-2xl font-bold text-gray-800 mb-6">
+                    <i class="fas fa-upload text-blue-600 mr-2"></i>
+                    Upload Parts List PDF
+                </h2>
+                
+                <div id="dropZone" class="border-4 border-dashed border-gray-300 rounded-lg p-12 text-center hover:border-blue-400 transition-colors cursor-pointer bg-gray-50">
+                    <i class="fas fa-file-pdf text-6xl text-gray-400 mb-4"></i>
+                    <p class="text-xl font-semibold text-gray-700 mb-2">Sleep PDF hier of klik om te uploaden</p>
+                    <p class="text-gray-500">Ondersteunt PDF bestanden tot 10MB</p>
+                    <input type="file" id="pdfInput" accept=".pdf" class="hidden">
+                </div>
+                
+                <div id="uploadProgress" class="mt-6 hidden">
+                    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-sm font-medium text-blue-800">Uploaden en analyseren...</span>
+                            <span id="progressPercent" class="text-sm font-medium text-blue-800">0%</span>
+                        </div>
+                        <div class="w-full bg-blue-200 rounded-full h-2">
+                            <div id="progressBar" class="bg-blue-600 h-2 rounded-full transition-all" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="uploadSuccess" class="mt-6 hidden">
+                    <div class="bg-green-50 border border-green-200 rounded-lg p-4">
+                        <h3 class="text-lg font-semibold text-green-800 mb-2">
+                            <i class="fas fa-check-circle mr-2"></i>PDF Succesvol Verwerkt
+                        </h3>
+                        <p class="text-gray-700" id="uploadSuccessMessage"></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Analysis Tab -->
+        <div id="analysis-tab" class="tab-content hidden">
+            <div class="bg-white rounded-lg shadow-md p-8">
+                <h2 class="text-2xl font-bold text-gray-800 mb-6">
+                    <i class="fas fa-chart-line text-blue-600 mr-2"></i>
+                    AI Analyse Resultaten
+                </h2>
+                
+                <div id="analysisEmpty" class="text-center py-12">
+                    <i class="fas fa-inbox text-6xl text-gray-300 mb-4"></i>
+                    <p class="text-xl text-gray-500">Nog geen analyse uitgevoerd</p>
+                    <p class="text-gray-400 mt-2">Gebruik de Zoeken of Upload tab om te beginnen</p>
+                </div>
+                
+                <div id="analysisContent" class="hidden">
+                    <!-- Equipment Info -->
+                    <div class="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-6 mb-6">
+                        <h3 class="text-lg font-bold text-gray-800 mb-4">
+                            <i class="fas fa-info-circle text-blue-600 mr-2"></i>Apparaat Informatie
+                        </h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <span class="text-sm text-gray-600">Merk:</span>
+                                <p class="font-semibold text-gray-800" id="analysisBrand">-</p>
+                            </div>
+                            <div>
+                                <span class="text-sm text-gray-600">Model:</span>
+                                <p class="font-semibold text-gray-800" id="analysisModel">-</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Parts Summary -->
+                    <div class="bg-white border border-gray-200 rounded-lg p-6 mb-6">
+                        <h3 class="text-lg font-bold text-gray-800 mb-4">
+                            <i class="fas fa-list-ul text-blue-600 mr-2"></i>Onderdelen Overzicht
+                        </h3>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div class="bg-blue-50 rounded-lg p-4 text-center">
+                                <p class="text-3xl font-bold text-blue-600" id="totalParts">0</p>
+                                <p class="text-sm text-gray-600">Totaal Onderdelen</p>
+                            </div>
+                            <div class="bg-green-50 rounded-lg p-4 text-center">
+                                <p class="text-3xl font-bold text-green-600" id="criticalParts">0</p>
+                                <p class="text-sm text-gray-600">Kritieke Onderdelen</p>
+                            </div>
+                            <div class="bg-amber-50 rounded-lg p-4 text-center">
+                                <p class="text-3xl font-bold text-amber-600" id="consumableParts">0</p>
+                                <p class="text-sm text-gray-600">Verbruiksartikelen</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Parts Table -->
+                    <div class="overflow-x-auto">
+                        <h3 class="text-lg font-bold text-gray-800 mb-4">
+                            <i class="fas fa-table text-blue-600 mr-2"></i>Geanalyseerde Onderdelen
+                        </h3>
+                        <table class="min-w-full bg-white border border-gray-200 rounded-lg">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Part Number</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Beschrijving</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Hoeveelheid</th>
+                                </tr>
+                            </thead>
+                            <tbody id="partsTableBody" class="divide-y divide-gray-200">
+                                <!-- Dynamic content -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Generate Tab -->
+        <div id="generate-tab" class="tab-content hidden">
+            <div class="bg-white rounded-lg shadow-md p-8">
+                <h2 class="text-2xl font-bold text-gray-800 mb-6">
+                    <i class="fas fa-file-excel text-blue-600 mr-2"></i>
+                    Genereer BOM & RSPL Export
+                </h2>
+                
+                <div id="generateEmpty" class="text-center py-12">
+                    <i class="fas fa-inbox text-6xl text-gray-300 mb-4"></i>
+                    <p class="text-xl text-gray-500">Nog geen data om te exporteren</p>
+                    <p class="text-gray-400 mt-2">Voer eerst een analyse uit via Zoeken of Upload</p>
+                </div>
+                
+                <div id="generateContent" class="hidden">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        
+                        <!-- BOM Generator -->
+                        <div class="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-6 border-2 border-blue-200">
+                            <div class="text-center mb-6">
+                                <i class="fas fa-clipboard-list text-5xl text-blue-600 mb-3"></i>
+                                <h3 class="text-xl font-bold text-gray-800 mb-2">Bill of Materials (BOM)</h3>
+                                <p class="text-sm text-gray-600">Complete onderdelen lijst met 70+ kolommen</p>
+                            </div>
+                            
+                            <div class="bg-white rounded-lg p-4 mb-4">
+                                <h4 class="font-semibold text-gray-700 mb-2">Bevat:</h4>
+                                <ul class="text-sm text-gray-600 space-y-1">
+                                    <li><i class="fas fa-check text-green-600 mr-2"></i>Complete product breakdown</li>
+                                    <li><i class="fas fa-check text-green-600 mr-2"></i>OEM & subcontractor info</li>
+                                    <li><i class="fas fa-check text-green-600 mr-2"></i>Prijzen & afmetingen</li>
+                                    <li><i class="fas fa-check text-green-600 mr-2"></i>Export control classificaties</li>
+                                    <li><i class="fas fa-check text-green-600 mr-2"></i>MTBF/MTTR gegevens</li>
+                                    <li><i class="fas fa-check text-green-600 mr-2"></i>Obsolescence informatie</li>
+                                </ul>
+                                <div class="mt-3 pt-3 border-t border-gray-100">
+                                    <p class="text-xs text-gray-500">
+                                        <i class="fas fa-info-circle text-blue-500 mr-1"></i>
+                                        Inhoud: <span id="bomPartCount" class="font-semibold text-blue-700">—</span>
+                                    </p>
+                                </div>
+                            </div>
+                            
+                            <button id="generateBomBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition-colors shadow-md hover:shadow-lg">
+                                <i class="fas fa-download mr-2"></i>Download BOM (XLSX)
+                            </button>
+                        </div>
+                        
+                        <!-- RSPL Generator -->
+                        <div class="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-6 border-2 border-green-200">
+                            <div class="text-center mb-6">
+                                <i class="fas fa-ship text-5xl text-green-600 mb-3"></i>
+                                <h3 class="text-xl font-bold text-gray-800 mb-2">Recommended Spare Parts List (RSPL)</h3>
+                                <p class="text-sm text-gray-600">3-jaars voorspelling voor scheepsvoorraad</p>
+                            </div>
+                            
+                            <div class="bg-white rounded-lg p-4 mb-4">
+                                <h4 class="font-semibold text-gray-700 mb-2">Bevat:</h4>
+                                <ul class="text-sm text-gray-600 space-y-1">
+                                    <li><i class="fas fa-check text-green-600 mr-2"></i>Spare parts classificatie (Pr/Cr/Con)</li>
+                                    <li><i class="fas fa-check text-green-600 mr-2"></i>Aanbevolen hoeveelheden 0-2 jaar</li>
+                                    <li><i class="fas fa-check text-green-600 mr-2"></i>Aanbevolen hoeveelheden 0-6 jaar</li>
+                                    <li><i class="fas fa-check text-green-600 mr-2"></i>Storage & handling informatie</li>
+                                    <li><i class="fas fa-check text-green-600 mr-2"></i>Repair level classificatie</li>
+                                    <li><i class="fas fa-check text-green-600 mr-2"></i>HS codes & COO</li>
+                                </ul>
+                                <div class="mt-3 pt-3 border-t border-gray-100">
+                                    <p class="text-xs text-gray-500">
+                                        <i class="fas fa-filter text-green-500 mr-1"></i>
+                                        Selectie: <span id="rsplPartCount" class="font-semibold text-green-700">—</span>
+                                    </p>
+                                </div>
+                            </div>
+                            
+                            <button id="generateRsplBtn" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition-colors shadow-md hover:shadow-lg">
+                                <i class="fas fa-download mr-2"></i>Download RSPL (XLSX)
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Export Status -->
+                    <div id="exportStatus" class="mt-6 hidden">
+                        <div class="bg-green-50 border border-green-200 rounded-lg p-4">
+                            <h4 class="text-lg font-semibold text-green-800 mb-2">
+                                <i class="fas fa-check-circle mr-2"></i>Export Succesvol
+                            </h4>
+                            <p class="text-gray-700" id="exportStatusMessage"></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-gray-800 text-white mt-12">
+        <div class="container mx-auto px-4 py-8">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+                <div>
+                    <h3 class="text-lg font-bold mb-4">PartsFinder Pro</h3>
+                    <p class="text-gray-400 text-sm">Professionele spare parts analyse voor grootkeuken apparatuur met AI-ondersteuning.</p>
+                </div>
+                <div>
+                    <h3 class="text-lg font-bold mb-4">Features</h3>
+                    <ul class="text-gray-400 text-sm space-y-2">
+                        <li><i class="fas fa-check text-green-500 mr-2"></i>Online parts list zoeken</li>
+                        <li><i class="fas fa-check text-green-500 mr-2"></i>PDF upload & parsing</li>
+                        <li><i class="fas fa-check text-green-500 mr-2"></i>AI-gedreven analyse</li>
+                        <li><i class="fas fa-check text-green-500 mr-2"></i>BOM & RSPL generatie</li>
+                    </ul>
+                </div>
+                <div>
+                    <h3 class="text-lg font-bold mb-4">Technologie</h3>
+                    <ul class="text-gray-400 text-sm space-y-2">
+                        <li><i class="fas fa-code text-blue-500 mr-2"></i>HTML5 / CSS3 / JavaScript</li>
+                        <li><i class="fas fa-robot text-purple-500 mr-2"></i>Cohere AI API</li>
+                        <li><i class="fas fa-file-excel text-green-500 mr-2"></i>SheetJS Excel Export</li>
+                        <li><i class="fas fa-file-pdf text-red-500 mr-2"></i>PDF.js Parsing</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="border-t border-gray-700 mt-8 pt-6 text-center text-gray-400 text-sm">
+                <p>&copy; 2026 Arno Bergmans. Versie 1.0.0 - Alle rechten voorbehouden.</p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- JavaScript Files -->
+    <script src="js/app.js"></script>
+    <script src="js/search.js"></script>
+    <script src="js/ai-analysis.js"></script>
+    <script src="js/pdf-parser.js"></script>
+    <script src="js/bom-generator.js"></script>
+    <script src="js/rspl-generator.js"></script>
+    <script src="js/excel-export.js"></script>
+
+</body>
+</html>
