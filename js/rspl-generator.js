@@ -1,6 +1,8 @@
 // PartsFinder Pro - RSPL Generator
 // Generates Recommended Spare Parts List with 20 columns for marine applications
-// FIX: Uses real part numbers; RSPL bevat ALLEEN kritieke/aanbevolen onderdelen (Cr + kritieke Pr)
+// FIX v3: classifyPartsIntelligently() aangeroepen vóór filter — nooit meer 0 kritieke onderdelen
+// FIX v3: Veiligheidsnet: als filter nul oplevert, worden ALLE onderdelen opgenomen
+// FIX: Uses real part numbers; RSPL bevat kritieke/aanbevolen onderdelen
 
 document.addEventListener('DOMContentLoaded', function() {
     const generateRsplBtn = document.getElementById('generateRsplBtn');
@@ -39,27 +41,43 @@ async function generateRSPL() {
         return;
     }
 
-    // ── RSPL: alleen kritieke / aanbevolen onderdelen ────────────────────────────
-    // Selectiecriteria:
-    //   • type === 'Cr'  (Corrective / Critical)
-    //   • type === 'Con' (Consumables — altijd aanbevolen aan boord)
-    //   • type === 'Pr' met critical === true (preventief maar uitdrukkelijk kritiek)
-    const rsplParts = AppState.analysisData.parts.filter(part => {
+    // ── STAP 1: Pas intelligente classificatie toe op ALLE onderdelen ────────────
+    // Dit zorgt ervoor dat onderdelen als motors, pompen, elementen etc.
+    // automatisch als 'Cr' worden geclassificeerd, ook als de AI dat niet deed.
+    const classifiedParts = classifyPartsIntelligently(AppState.analysisData.parts);
+
+    // Update de globale state met de verbeterde classificaties
+    AppState.analysisData.parts = classifiedParts;
+
+    // Statistieken na classificatie
+    const crCount  = classifiedParts.filter(p => p.type === 'Cr').length;
+    const conCount = classifiedParts.filter(p => p.type === 'Con').length;
+    const prCount  = classifiedParts.filter(p => p.type === 'Pr').length;
+    console.log(`Na classificatie: ${crCount} Cr, ${conCount} Con, ${prCount} Pr van ${classifiedParts.length} totaal`);
+
+    // ── STAP 2: Filter voor RSPL (Cr + Con + kritieke Pr) ────────────────────────
+    let rsplParts = classifiedParts.filter(part => {
         if (part.type === 'Cr')  return true;
         if (part.type === 'Con') return true;
         if (part.type === 'Pr' && part.critical === true) return true;
         return false;
     });
 
+    // ── STAP 3: Veiligheidsnet — als filter nog steeds nul oplevert ──────────────
+    // Dit kan gebeuren als de PDF alleen zeer algemene beschrijvingen heeft
+    // zonder herkende sleutelwoorden. Neem dan ALLE onderdelen op in de RSPL.
+    let fallbackUsed = false;
     if (rsplParts.length === 0) {
+        console.warn('RSPL filter leverde 0 resultaten op. Alle onderdelen worden opgenomen.');
+        rsplParts = [...classifiedParts];
+        fallbackUsed = true;
         showNotification(
-            'Geen kritieke of aanbevolen onderdelen gevonden. Controleer de analyse data.',
+            `Let op: Geen kritieke onderdelen automatisch herkend. Alle ${classifiedParts.length} onderdelen zijn opgenomen in de RSPL. Controleer de classificaties handmatig.`,
             'warning'
         );
-        return;
     }
 
-    const totalParts = AppState.analysisData.parts.length;
+    const totalParts = classifiedParts.length;
 
     const btn = document.getElementById('generateRsplBtn');
     btn.disabled = true;
@@ -77,14 +95,19 @@ async function generateRSPL() {
         const filename = `RSPL_${AppState.analysisData.brand}_${AppState.analysisData.model}_${formatDate()}.xlsx`;
         exportToExcel(rsplData, RSPL_COLUMNS, filename, 'RSPL');
 
-        showExportSuccess(
-            filename,
-            `RSPL (${rsplParts.length} kritieke onderdelen van ${totalParts} totaal)`
-        );
+        const selectionNote = fallbackUsed
+            ? `(alle ${rsplParts.length} onderdelen — geen automatische selectie mogelijk)`
+            : `(${rsplParts.length} kritieke onderdelen van ${totalParts} totaal)`;
+
+        showExportSuccess(filename, `RSPL ${selectionNote}`);
         showNotification(
-            `RSPL succesvol gegenereerd: ${rsplParts.length} van ${totalParts} onderdelen geselecteerd als kritiek/aanbevolen.`,
+            `RSPL gegenereerd: ${rsplParts.length} van ${totalParts} onderdelen ` +
+            `(${crCount} Cr, ${conCount} Con, ${classifiedParts.filter(p=>p.type==='Pr'&&p.critical).length} kritieke Pr).`,
             'success'
         );
+
+        // Update de analyse-display zodat de nieuwe classificaties zichtbaar zijn
+        updateAnalysisDisplay(AppState.analysisData);
 
     } catch (error) {
         console.error('RSPL generation error:', error);
@@ -100,13 +123,13 @@ function transformToRSPLFormat(parts, metadata) {
     const repairLevels = ['OLM', 'ILM', 'DLM', 'CLM'];
 
     const reasonsForSelection = {
-        'Cr':  'Critical for operation - High failure risk',
-        'Pr':  'Preventive maintenance - Scheduled replacement (critical)',
-        'Con': 'Consumable - Regular usage'
+        'Cr':  'Critical for operation — equipment failure without this part',
+        'Pr':  'Preventive maintenance — scheduled replacement required',
+        'Con': 'Consumable — regular usage and replacement'
     };
 
     return parts.map((part, index) => {
-        // ── Gebruik ALTIJD het echte onderdeelnummer uit de brondata ─────────────
+        // ── Gebruik ALTIJD het echte onderdeelnummer ─────────────────────────────
         const realPartNumber = resolvePartNumber(part);
 
         // Aanbevolen hoeveelheden op basis van type en kritikaliteit
@@ -122,8 +145,8 @@ function transformToRSPLFormat(parts, metadata) {
                 break;
             case 'Pr':
             default:
-                qty2yr = 2;
-                qty6yr = 6;
+                qty2yr = part.critical ? 2 : 1;
+                qty6yr = part.critical ? 6 : 3;
                 break;
         }
 
@@ -151,7 +174,8 @@ function transformToRSPLFormat(parts, metadata) {
                 part.name.toLowerCase().includes('seal') ||
                 part.name.toLowerCase().includes('gasket') ||
                 part.name.toLowerCase().includes('rubber') ||
-                part.name.toLowerCase().includes('o-ring')
+                part.name.toLowerCase().includes('o-ring') ||
+                part.name.toLowerCase().includes('pakking')
             ))
         ) ? 'Y' : 'N';
 
@@ -171,7 +195,7 @@ function transformToRSPLFormat(parts, metadata) {
             'NO. RECOM. SPARES / HS code (douane) / COO / 0 - 2 YEARS': `${qty2yr} / ${hsCode} / ${coo}`,
             'NO. RECOM. SPARES / 0 - 6 YEARS, INCL. 1ste OVERHAUL': qty6yr,
             'UNIT OF ISSUE': part.unitOfIssue || unitsOfIssue[Math.floor(Math.random() * unitsOfIssue.length)],
-            'REASON FOR SELECTION': part.reasonForSelection || reasonsForSelection[part.type] || 'Standard spare part',
+            'REASON FOR SELECTION': part.reasonForSelection || reasonsForSelection[part.type] || reasonsForSelection['Pr'],
             'MIN. SALES QTY': part.minSalesQty || 1,
             'STANDARD PACKAGE QUANTITY': part.standardPackageQty || (part.type === 'Con' ? 10 : 1),
             'DIMENSION ITEM L x W x H (CM)': dimensions,
@@ -198,10 +222,10 @@ function generateRSPLRemarks(part, metadata) {
 
     switch (part.type) {
         case 'Cr':
-            remarks.push('Keep on board - Critical for operation');
+            remarks.push('Keep on board — Critical for operation');
             break;
         case 'Con':
-            remarks.push('Regular consumable - Monitor stock levels');
+            remarks.push('Regular consumable — Monitor stock levels');
             break;
         case 'Pr':
             remarks.push('Preventive maintenance spare');
@@ -219,13 +243,13 @@ function generateRSPLRemarks(part, metadata) {
     return remarks.join(' | ');
 }
 
-// ── Hulpfunctie: geef het echte onderdeelnummer terug, nooit een gegenereerde waarde ──
+// ── Hulpfunctie: geef het echte onderdeelnummer terug ────────────────────────
 function resolvePartNumber(part) {
     const candidates = [part.partNumber, part.oemPartNumber, part.supplierPartNumber];
     for (const c of candidates) {
         if (c && String(c).trim() !== '') return String(c).trim();
     }
-    return ''; // Onbekend → lege cel, zodat het zichtbaar is dat het ontbreekt
+    return '';
 }
 
 function generateHSCode() {
@@ -247,16 +271,6 @@ function calculateRecommendedQuantities(part, yearsOfOperation) {
     const baseQty = { 'Cr': part.critical ? 3 : 2, 'Con': 10, 'Pr': 2 };
     const qtyPerYear = baseQty[part.type] || 2;
     return Math.ceil(qtyPerYear * yearsOfOperation / 2);
-}
-
-function validateRSPLData(data) {
-    const required = ['SPARE PART NAME', 'SUPPLIER PART NUMBER', 'QUANTITY PER ASSEMBLY'];
-    for (const row of data) {
-        for (const field of required) {
-            if (!row[field]) console.warn(`Missing required field: ${field} in row`, row);
-        }
-    }
-    return true;
 }
 
 // Export functions
