@@ -6,7 +6,7 @@ const AppState = {
     currentTab: 'search',
     analysisData: null,
     apiKeys: {
-        cohere: localStorage.getItem('cohereApiKey') || ''
+        gemini: localStorage.getItem('geminiApiKey') || ''
     }
 };
 
@@ -20,7 +20,7 @@ const elements = {
     settingsModal: document.getElementById('settingsModal'),
     settingsBtn: document.getElementById('settingsBtn'),
     closeSettingsBtn: document.getElementById('closeSettingsBtn'),
-    cohereApiKeyInput: document.getElementById('cohereApiKey'),
+    geminiApiKeyInput: document.getElementById('geminiApiKey'),
     saveApiKeyBtn: document.getElementById('saveApiKeyBtn'),
     
     // Analysis Display
@@ -97,7 +97,7 @@ function initializeSettings() {
     elements.settingsBtn.addEventListener('click', () => {
         elements.settingsModal.classList.remove('hidden');
         elements.settingsModal.classList.add('flex');
-        elements.cohereApiKeyInput.value = AppState.apiKeys.cohere;
+        elements.geminiApiKeyInput.value = AppState.apiKeys.gemini;
     });
     
     // Close modal
@@ -120,7 +120,7 @@ function closeSettingsModal() {
 }
 
 function saveApiKey() {
-    const apiKey = elements.cohereApiKeyInput.value.trim();
+    const apiKey = elements.geminiApiKeyInput.value.trim();
     
     if (!apiKey) {
         showNotification('Vul een geldige API key in', 'error');
@@ -128,17 +128,17 @@ function saveApiKey() {
     }
     
     // Save to localStorage
-    localStorage.setItem('cohereApiKey', apiKey);
-    AppState.apiKeys.cohere = apiKey;
+    localStorage.setItem('geminiApiKey', apiKey);
+    AppState.apiKeys.gemini = apiKey;
     
     showNotification('API key succesvol opgeslagen!', 'success');
     closeSettingsModal();
 }
 
 function checkApiKey() {
-    if (!AppState.apiKeys.cohere) {
+    if (!AppState.apiKeys.gemini) {
         setTimeout(() => {
-            if (confirm('Geen Cohere API key gevonden. Wilt u deze nu instellen?')) {
+            if (confirm('Geen Gemini API key gevonden. Wilt u deze nu instellen?')) {
                 elements.settingsModal.classList.remove('hidden');
                 elements.settingsModal.classList.add('flex');
             }
@@ -303,8 +303,8 @@ function formatDate(date = new Date()) {
 
 // Utility: Validate API Key
 function validateApiKey() {
-    if (!AppState.apiKeys.cohere) {
-        showNotification('Geen Cohere API key ingesteld. Ga naar Instellingen.', 'error');
+    if (!AppState.apiKeys.gemini) {
+        showNotification('Geen Gemini API key ingesteld. Ga naar Instellingen.', 'error');
         return false;
     }
     return true;

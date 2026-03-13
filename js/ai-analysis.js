@@ -1,18 +1,13 @@
-// PartsFinder Pro - AI Analysis with Cohere API
-// Handles intelligent analysis of spare parts lists using Cohere AI
-// FIX v3: Intelligente keyword-classificatie toegevoegd (Cr/Con/Pr + critical flag)
-// FIX v3: generatePartsListFromAI() toegevoegd voor Zoeken-tab
-// FIX: Original part numbers (partNumber / oemPartNumber) are NEVER overwritten
+// PartsFinder Pro - AI Analysis met Google Gemini API
+// Gratis tier: 15 requests/minuut, 1500 requests/dag — ruim voldoende
+// Gemini 2.0 Flash — snel, gratis, goede kwaliteit
 
-const COHERE_API_URL = 'https://api.cohere.ai/v1/generate';
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
 // ══════════════════════════════════════════════════════════════════════════════
-// KEYWORD-CLASSIFICATIE — geeft elk onderdeel het juiste type (Cr/Con/Pr)
-// en critical-vlag op basis van de naam/beschrijving.
-// Wordt aangeroepen NADAT de AI of regex de onderdelen heeft geëxtraheerd.
+// KEYWORD-CLASSIFICATIE — veiligheidsnet na AI-extractie
 // ══════════════════════════════════════════════════════════════════════════════
 function classifyPartsIntelligently(parts) {
-    // Onderdelen waarvan uitval directe stilstand veroorzaakt → Cr + critical:true
     const correctiveKeywords = [
         'motor', 'pump', 'pomp', 'fan', 'ventilator', 'blower',
         'controller', 'control board', 'pcb', 'printed circuit', 'circuit board',
@@ -22,11 +17,10 @@ function classifyPartsIntelligently(parts) {
         'gas valve', 'gasventiel', 'solenoid valve', 'magnetventiel',
         'steam generator', 'stoomgenerator', 'boiler',
         'actuator', 'aandrijving', 'drive', 'frequency inverter', 'frequentieregelaar',
-        'compressor', 'transformer', 'transformator',
-        'magnetron', 'magnetron tube', 'microwave', 'magnetron'
+        'compressor', 'transformer', 'transformator', 'inverter',
+        'magnetron tube', 'microwave generator', 'relay board', 'relaiskaart'
     ];
 
-    // Verbruiksartikelen die regelmatig vervangen worden → Con
     const consumableKeywords = [
         'filter', 'gasket', 'pakking', 'seal', 'afdichting',
         'o-ring', 'oring', 'o ring', 'sealing ring', 'dichting',
@@ -35,14 +29,15 @@ function classifyPartsIntelligently(parts) {
         'fuse', 'zekering', 'belt', 'riem', 'band',
         'grease', 'vet', 'lubricant', 'smeermiddel',
         'descaler', 'cleaner', 'reiniger', 'tablet',
-        'nozzle', 'sproeier', 'spray arm', 'sproeiarm'
+        'nozzle', 'sproeier', 'spray arm', 'sproeiarm',
+        'detergent', 'rinse aid', 'spoelmiddel', 'reinigingstablet'
     ];
 
-    // Onderdelen voor preventief onderhoud → Pr  (critical:true als ze snel-slijtend zijn)
     const criticalPreventiveKeywords = [
         'bearing', 'lager', 'carbon brush', 'koolborstel',
         'door seal', 'deurafdichting', 'oven seal',
-        'ignition electrode', 'entstekingselektrode'
+        'ignition electrode', 'elektrode', 'probe', 'temperature probe',
+        'door gasket', 'oven door'
     ];
 
     return parts.map(part => {
@@ -52,87 +47,129 @@ function classifyPartsIntelligently(parts) {
             (part.partNumber  || '')
         ).toLowerCase();
 
-        // 1. Check Corrective/Critical
         const isCorrective = correctiveKeywords.some(kw => haystack.includes(kw));
-        if (isCorrective) {
-            return { ...part, type: 'Cr', critical: true };
-        }
+        if (isCorrective) return { ...part, type: 'Cr', critical: true };
 
-        // 2. Check Consumable
         const isConsumable = consumableKeywords.some(kw => haystack.includes(kw));
-        if (isConsumable) {
-            return { ...part, type: 'Con', critical: false };
-        }
+        if (isConsumable) return { ...part, type: 'Con', critical: false };
 
-        // 3. Check kritieke preventieve onderdelen
         const isCriticalPreventive = criticalPreventiveKeywords.some(kw => haystack.includes(kw));
-        if (isCriticalPreventive) {
-            return { ...part, type: 'Pr', critical: true };
-        }
+        if (isCriticalPreventive) return { ...part, type: 'Pr', critical: true };
 
-        // 4. Als de AI al een type heeft ingevuld dat niet 'Pr' is → bewaar dat
         if (part.type && part.type !== 'Pr') {
-            // Zorg voor correcte critical-vlag
-            if (part.type === 'Cr' && part.critical !== true) {
-                return { ...part, critical: true };
-            }
+            if (part.type === 'Cr' && part.critical !== true) return { ...part, critical: true };
             return part;
         }
 
-        // 5. Standaard: Pr, niet-kritiek
         return { ...part, type: part.type || 'Pr', critical: part.critical || false };
     });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// GENEREER PARTS LIST OP BASIS VAN AI-KENNIS (voor Zoeken-tab)
-// Vraagt Cohere om een geschatte parts list op basis van trainingskennis.
-// Part numbers zijn GESCHAT en worden duidelijk als zodanig gemarkeerd.
+// HULPFUNCTIE: roep Gemini API aan
 // ══════════════════════════════════════════════════════════════════════════════
-async function generatePartsListFromAI(brand, model) {
-    const apiKey = AppState.apiKeys.cohere;
-    if (!apiKey) {
-        throw new Error('Cohere API key not configured');
+async function callGeminiAPI(prompt, maxTokens = 8192) {
+    const apiKey = AppState.apiKeys.gemini;
+    if (!apiKey) throw new Error('Geen Gemini API key ingesteld. Ga naar Instellingen.');
+
+    const url = `${GEMINI_API_URL}?key=${apiKey}`;
+
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+                temperature:     0.2,
+                maxOutputTokens: maxTokens,
+                responseMimeType: 'application/json'  // Vraag Gemini om pure JSON terug te geven
+            }
+        })
+    });
+
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        const msg = err.error?.message || 'Onbekende fout';
+        // Geef een duidelijke foutmelding bij veelvoorkomende fouten
+        if (response.status === 400) throw new Error(`Gemini API fout (400): ${msg}`);
+        if (response.status === 403) throw new Error('Gemini API key ongeldig of geen toegang. Controleer je key.');
+        if (response.status === 429) throw new Error('Gemini rate limit bereikt. Wacht even en probeer opnieuw (max 15 req/min).');
+        throw new Error(`Gemini API fout: ${response.status} — ${msg}`);
     }
 
-    console.log(`Generating AI knowledge-based parts list for ${brand} ${model}...`);
+    const data = await response.json();
 
-    const prompt = `You are an expert in commercial kitchen equipment spare parts and maintenance.
+    // Gemini response structuur
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) throw new Error('Gemini gaf geen bruikbaar antwoord terug.');
 
-Generate a comprehensive spare parts list for ${brand} ${model} commercial kitchen equipment.
+    return text.trim();
+}
 
-IMPORTANT RULES:
-1. Use REAL part numbers if you know them from your training data for this specific brand/model.
-2. If you don't know the exact part number, leave "partNumber" as empty string "".
-3. Do NOT invent part numbers. Empty string is better than a wrong number.
-4. Include 15-30 realistic spare parts covering all major component categories.
-5. Classify CORRECTLY using the guide below.
+// ══════════════════════════════════════════════════════════════════════════════
+// PARSEER JSON UIT AI-ANTWOORD (robuust)
+// ══════════════════════════════════════════════════════════════════════════════
+function parseJSONFromAI(text) {
+    // Dankzij responseMimeType: 'application/json' geeft Gemini al pure JSON
+    // Maar als fallback toch ook markdown-blokken proberen te strippen
+    const jsonMatch =
+        text.match(/```json\s*([\s\S]*?)\s*```/) ||
+        text.match(/```\s*([\s\S]*?)\s*```/)     ||
+        text.match(/(\{[\s\S]*\})/);
 
-CLASSIFICATION GUIDE (follow strictly):
-- Heating element, burner, igniter, gas valve → type: "Cr", critical: true
-- PCB/control board, display, power supply, motor, pump, fan → type: "Cr", critical: true
-- Steam generator, boiler, solenoid valve, actuator, compressor → type: "Cr", critical: true
-- Filter, gasket, seal, o-ring, rubber part, fuse, lamp, belt → type: "Con", critical: false
-- Sensor, probe, thermostat, pressure switch → type: "Pr", critical: false
-- Bearing, carbon brush, door seal, ignition electrode → type: "Pr", critical: true
-- Door hinge, handle, knob, panel → type: "Pr", critical: false
+    const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : text;
 
-IMPORTANT: A realistic parts list for ${brand} equipment should contain:
-- ~30% Cr (corrective/critical) parts
-- ~30% Con (consumable) parts  
-- ~40% Pr (preventive) parts
+    try {
+        return JSON.parse(jsonStr);
+    } catch {
+        const cleaned = jsonStr
+            .replace(/,\s*}/g, '}')
+            .replace(/,\s*]/g, ']')
+            .replace(/\n/g, ' ');
+        return JSON.parse(cleaned);
+    }
+}
 
-Return ONLY valid JSON — no markdown, no explanation, no code fences:
+// ══════════════════════════════════════════════════════════════════════════════
+// GENEREER PARTS LIST VIA AI-KENNIS (voor Zoeken-tab)
+// ══════════════════════════════════════════════════════════════════════════════
+async function generatePartsListFromAI(brand, model) {
+    console.log(`Gemini genereert parts list voor ${brand} ${model}...`);
+
+    const prompt = `Je bent een expert in reserveonderdelen voor professionele grootkeukenapparatuur.
+Je kent de technische opbouw, veelvoorkomende storingen en onderhoudsbehoeften van alle grote merken
+(Rational, Convotherm, Electrolux, Hobart, Winterhalter, Alto-Shaam, Cleveland, Garland, etc.).
+
+Maak een uitgebreide spare parts lijst voor een ${brand} ${model}.
+
+REGELS VOOR ONDERDEELNUMMERS:
+- Gebruik ECHTE onderdeelnummers als je die kent voor dit specifieke merk/model.
+- Als je het exacte nummer NIET zeker weet, gebruik dan lege string "".
+- Verzin NOOIT onderdeelnummers. Leeg is beter dan fout.
+
+CLASSIFICATIEREGELS (volg exact):
+- Verwarmingselement, brander, ontsteker, gasventiel, boiler → type: "Cr", critical: true
+- PCB/printplaat, display, voeding, motor, pomp, ventilator → type: "Cr", critical: true
+- Stoomgenerator, magneetventiel, aandrijving, compressor, inverter → type: "Cr", critical: true
+- Filter, pakking, seal, o-ring, rubber onderdeel, zekering, lamp, riem → type: "Con", critical: false
+- Sensor, voeler, thermostaat, drukschakelaar → type: "Pr", critical: false
+- Lager, koolborstel, deurafdichting, ontstekingselektrode → type: "Pr", critical: true
+- Scharnieren, greep, knop, paneel → type: "Pr", critical: false
+
+STREEF NAAR DEZE VERDELING: minimaal 25% Cr, minimaal 25% Con, de rest Pr.
+Genereer 20-30 onderdelen die de volledige technische opbouw van het apparaat dekken.
+
+Retourneer ALLEEN geldige JSON in dit exacte formaat (geen uitleg, geen markdown):
 {
     "parts": [
         {
-            "partNumber": "string or empty",
-            "name": "string",
-            "description": "string",
+            "partNumber": "string of lege string",
+            "name": "korte naam max 60 tekens",
+            "description": "volledige beschrijving",
             "type": "Pr|Cr|Con",
             "quantity": 1,
             "supplier": "${brand}",
-            "unitPrice": "string",
+            "unitPrice": "geschatte europrijs als string",
             "dimensions": "",
             "weight": "",
             "critical": false
@@ -141,196 +178,101 @@ Return ONLY valid JSON — no markdown, no explanation, no code fences:
 }`;
 
     try {
-        const response = await fetch(COHERE_API_URL, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            },
-            body: JSON.stringify({
-                model: 'command-r',
-                prompt: prompt,
-                max_tokens: 4000,
-                temperature: 0.2,
-                k: 0,
-                stop_sequences: [],
-                return_likelihoods: 'NONE'
-            })
+        const rawText = await callGeminiAPI(prompt, 4096);
+        const parsed  = parseJSONFromAI(rawText);
+        let parts = parsed.parts || [];
+
+        // Verwijder duidelijke nep-patronen
+        const fakePattern = /^(HTR|PCB|SNS|GSK|FAN|VLV|STM|DSP|PSU|PMP|FLT|CBL|HSE|THR|RLY)-\d{4}$/;
+        parts = parts.map(part => {
+            if (part.partNumber && fakePattern.test(part.partNumber)) part.partNumber = '';
+            return part;
         });
 
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(`Cohere API error: ${response.status} - ${errorData.message || 'Unknown error'}`);
-        }
-
-        const data = await response.json();
-        const generatedText = data.generations[0].text.trim();
-
-        let parsedData;
-        try {
-            const jsonMatch = generatedText.match(/```json\s*([\s\S]*?)\s*```/) ||
-                             generatedText.match(/```\s*([\s\S]*?)\s*```/) ||
-                             generatedText.match(/(\{[\s\S]*\})/);
-            const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : generatedText;
-            parsedData = JSON.parse(jsonStr);
-        } catch (parseError) {
-            console.error('Failed to parse AI knowledge response as JSON:', parseError);
-            throw new Error('AI kon geen geldige JSON genereren. Probeer opnieuw of upload een PDF.');
-        }
-
-        let parts = parsedData.parts || [];
-
-        // Pas intelligente classificatie toe als veiligheidsnet
         parts = classifyPartsIntelligently(parts);
-
+        console.log(`Gemini genereerde ${parts.length} onderdelen voor ${brand} ${model}`);
         return parts;
 
     } catch (error) {
-        console.error('AI knowledge generation error:', error);
+        console.error('Gemini parts generation error:', error);
         throw error;
     }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ANALYSEER TEKST MET COHERE AI (voor PDF-upload tab)
+// ANALYSEER PDF-TEKST (voor Upload-tab)
 // ══════════════════════════════════════════════════════════════════════════════
 async function analyzeWithCohere(text, brand, model) {
-    const apiKey = AppState.apiKeys.cohere;
+    // Naam bewaard voor backward compatibility — gebruikt nu Gemini
+    console.log('Analyzing with Gemini AI (Google)...');
 
-    if (!apiKey) {
-        throw new Error('Cohere API key not configured');
-    }
-
-    console.log('Analyzing with Cohere AI...');
-
-    // Beperk tekst tot 6000 + 2000 tekens
     let analysisText = text;
-    if (text.length > 8000) {
-        analysisText = text.substring(0, 6000) + '\n...[tekst ingekort]...\n' + text.substring(text.length - 2000);
+    if (text.length > 14000) {
+        analysisText = text.substring(0, 11000) + '\n...[tekst ingekort]...\n' + text.substring(text.length - 2000);
     }
 
-    const prompt = `You are an expert in analyzing spare parts lists for commercial kitchen equipment.
+    const prompt = `Je bent een expert in het extraheren van spare parts informatie uit technische documentatie.
+Je herkent onderdeelnummers, beschrijvingen en hoeveelheden in elke lay-out (NL/EN/DE/FR).
 
-Brand: ${brand}
-Model: ${model}
+Extraheer ALLE onderdelen uit de volgende parts list tekst van ${brand} ${model}.
 
-Analyze the following parts list text and extract structured information about each spare part.
+KRITIEKE REGELS VOOR ONDERDEELNUMMERS:
+1. Kopieer het onderdeelnummer LETTER-VOOR-LETTER zoals het in de bron staat.
+   Geldige voorbeelden: "12345678", "SK-920481", "03.00.900", "4242040/08", "AB-1234-C"
+2. Verzin of wijzig NOOIT een onderdeelnummer.
+3. Als er geen nummer zichtbaar is → gebruik lege string "".
+4. "description" = de EXACTE beschrijvingstekst uit de bron (kopieer letterlijk).
+5. "name" = korte versie van de beschrijving (max 60 tekens).
 
-CRITICAL RULES FOR PART NUMBERS:
-1. The "partNumber" field must contain the EXACT part number as it appears in the source text.
-   Part numbers are typically: sequences of digits, alphanumeric codes, codes with dashes/dots/slashes.
-   Examples of valid part numbers: "12345678", "SK-920481", "03.00.900", "4242040/08", "AB-1234-C"
-2. Do NOT generate, invent or modify part numbers. Copy them character-for-character.
-3. If no part number is visible for an item, leave "partNumber" as empty string "".
-4. The "description" field must be the EXACT description text from the source — copy it as-is.
-5. The "name" field is a short version of the description (max 60 characters).
+CLASSIFICATIEREGELS (volg strikt):
+- Verwarmingselement, brander, ontsteker, gasventiel, boiler → type: "Cr", critical: true
+- PCB, printplaat, display, voeding, motor, pomp, ventilator, aandrijving → type: "Cr", critical: true
+- Filter, pakking, seal, o-ring, rubber, zekering, lamp, riem, nozzle → type: "Con", critical: false
+- Sensor, voeler, thermostaat, drukschakelaar → type: "Pr", critical: false
+- Lager, deurafdichting, koolborstel, elektrode → type: "Pr", critical: true
+- Scharnieren, greep, knop, paneel, bekleding → type: "Pr", critical: false
 
-CLASSIFICATION GUIDE (follow strictly):
-- Heating element, burner, igniter, gas valve → type: "Cr", critical: true
-- PCB/control board, display, power supply, motor, pump, fan, blower → type: "Cr", critical: true
-- Steam generator, boiler, solenoid valve, actuator, compressor → type: "Cr", critical: true
-- Filter, gasket, seal, o-ring, rubber part, fuse, lamp, belt → type: "Con", critical: false
-- Sensor, probe, thermostat, pressure switch → type: "Pr", critical: false
-- Bearing, carbon brush, door seal, ignition electrode → type: "Pr", critical: true
-- Door hinge, handle, knob, panel → type: "Pr", critical: false
-
-SOURCE TEXT:
+BRONTEKST:
 ${analysisText}
 
-For each part found in the text, extract ALL of these fields:
-- partNumber  (EXACT part number from the text — copy character-for-character, or "" if not found)
-- name        (Part name / short description — max 60 chars)
-- description (Full description EXACTLY as in the source text)
-- type        (Pr=Preventive, Cr=Corrective/Critical, Con=Consumable — use classification guide above)
-- quantity    (numeric quantity, default 1)
-- supplier    (supplier name if available, else "")
-- unitPrice   (price as string if available, else "")
-- dimensions  (LxWxH in cm if available, else "")
-- weight      (weight in kg if available, else "")
-- critical    (boolean: true for Cr parts and critical Pr parts, false otherwise)
-
-Return ONLY valid JSON in this exact format — no markdown, no explanation, no code fences:
+Retourneer ALLEEN geldige JSON (geen uitleg, geen markdown):
 {
     "parts": [
         {
-            "partNumber": "string",
-            "name": "string",
-            "description": "string",
+            "partNumber": "exacte kopie uit bron of lege string",
+            "name": "korte naam",
+            "description": "exacte beschrijving uit bron",
             "type": "Pr|Cr|Con",
             "quantity": 1,
-            "supplier": "string",
-            "unitPrice": "string",
-            "dimensions": "string",
-            "weight": "string",
+            "supplier": "",
+            "unitPrice": "",
+            "dimensions": "",
+            "weight": "",
             "critical": false
         }
     ]
 }`;
 
     try {
-        const response = await fetch(COHERE_API_URL, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            },
-            body: JSON.stringify({
-                model: 'command-r',
-                prompt: prompt,
-                max_tokens: 4000,
-                temperature: 0.1,
-                k: 0,
-                stop_sequences: [],
-                return_likelihoods: 'NONE'
-            })
-        });
+        const rawText = await callGeminiAPI(prompt, 8192);
+        const parsed  = parseJSONFromAI(rawText);
+        let parts = parsed.parts || [];
 
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(`Cohere API error: ${response.status} - ${errorData.message || 'Unknown error'}`);
-        }
-
-        const data = await response.json();
-        const generatedText = data.generations[0].text.trim();
-
-        let parsedData;
-        try {
-            const jsonMatch = generatedText.match(/```json\s*([\s\S]*?)\s*```/) ||
-                             generatedText.match(/```\s*([\s\S]*?)\s*```/) ||
-                             generatedText.match(/(\{[\s\S]*\})/);
-            const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : generatedText;
-            parsedData = JSON.parse(jsonStr);
-        } catch (parseError) {
-            console.error('Failed to parse AI response as JSON:', parseError);
-            console.log('Raw response:', generatedText);
-            throw new Error(
-                'AI kon de parts list niet verwerken tot geldig JSON. ' +
-                'Controleer of de PDF duidelijke onderdeelnummers bevat en probeer opnieuw. ' +
-                'Raw AI output (eerste 200 tekens): ' + generatedText.substring(0, 200)
-            );
-        }
-
-        let parts = parsedData.parts || [];
-
-        // Verwijder duidelijk nep-nummers (AI-hallucinatie)
         const fakePattern = /^(HTR|PCB|SNS|GSK|FAN|VLV|STM|DSP|PSU|PMP|FLT|CBL|HSE|THR|RLY)-\d{4}$/;
         parts = parts.map(part => {
             if (part.partNumber && fakePattern.test(part.partNumber)) {
-                console.warn(`Nep-onderdeelnummer gedetecteerd en verwijderd: ${part.partNumber}`);
+                console.warn(`Nep-nummer verwijderd: ${part.partNumber}`);
                 part.partNumber = '';
             }
             return part;
         });
 
-        // ── KRITIEK: pas intelligente classificatie toe als veiligheidsnet ────────
         parts = classifyPartsIntelligently(parts);
-
+        console.log(`Gemini extraheerde ${parts.length} onderdelen uit PDF`);
         return parts;
 
     } catch (error) {
-        console.error('Cohere AI analysis error:', error);
+        console.error('Gemini PDF analysis error:', error);
         throw error;
     }
 }
@@ -339,74 +281,43 @@ Return ONLY valid JSON in this exact format — no markdown, no explanation, no 
 // VERRIJK PARTS VOOR BOM
 // ══════════════════════════════════════════════════════════════════════════════
 async function analyzeForBOM(partsData, brand, model) {
-    const apiKey = AppState.apiKeys.cohere;
+    const partsMinimal = partsData.map(p => ({
+        partNumber: p.partNumber || '',
+        name:       p.name || '',
+        type:       p.type || 'Pr',
+        critical:   p.critical || false,
+        quantity:   p.quantity || 1
+    }));
 
-    if (!apiKey) {
-        console.warn('No API key, using default BOM structure');
-        return enhancePartsForBOM(partsData, brand, model);
-    }
+    const prompt = `Je bent een expert in Bill of Materials voor industriële apparatuur.
 
-    const prompt = `You are an expert in creating Bill of Materials (BOM) for industrial equipment.
+Verrijk deze spare parts lijst voor ${brand} ${model} met BOM-technische gegevens.
+KRITIEKE REGEL: Bewaar de originele "partNumber" waarden exact — wijzig ze NOOIT.
 
-Brand: ${brand}
-Model: ${model}
+Onderdelen:
+${JSON.stringify(partsMinimal)}
 
-Given the following spare parts, enhance each with additional BOM-specific information.
+Voeg toe aan elk onderdeel (bewaar alle bestaande velden):
+- manufacturer (fabrikantsnaam, gebruik ${brand} indien onbekend)
+- cageCode (5-karakter CAGE code)
+- unitOfIssue (EA / SET / KG / M / L / PC)
+- unitPrice (geschatte europrijs als string)
+- deliveryTime (integer dagen)
+- mtbf (integer uren)
+- mttr (integer uren)
+- repairLevel (OLM / ILM / DLM)
+- shelfLife (integer maanden)
+- hsCode (HS douanecode)
+- countryOfOrigin (2-letter ISO)
 
-CRITICAL RULE: You must PRESERVE the existing "partNumber" and "oemPartNumber" values exactly as provided.
-Do NOT change, replace, or invent part numbers. Only add the new fields listed below.
-
-${JSON.stringify(partsData, null, 2)}
-
-Add these fields to each part (keep all existing fields unchanged):
-- manufacturer     (manufacturer name, use brand if unknown)
-- cageCode         (5-char CAGE code)
-- unitOfIssue      (EA / SET / KG / M / L / PC)
-- unitPrice        (estimated Euro price as string, only if not already set)
-- deliveryTime     (integer days)
-- mtbf             (integer hours)
-- mttr             (integer hours)
-- repairLevel      (OLM / ILM / DLM)
-- shelfLife        (integer months)
-- hsCode           (HS customs code, Chapter 84)
-- countryOfOrigin  (2-letter ISO country code)
-
-Return ONLY valid JSON — no markdown, no explanation:
-{ "parts": [ { ...original fields preserved..., ...new fields added... } ] }`;
+Retourneer ALLEEN geldige JSON (geen uitleg, geen markdown):
+{ "parts": [ { ...alle originele velden ongewijzigd..., ...nieuwe velden... } ] }`;
 
     try {
-        const response = await fetch(COHERE_API_URL, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                model: 'command-r',
-                prompt: prompt,
-                max_tokens: 4000,
-                temperature: 0.3
-            })
-        });
-
-        if (!response.ok) {
-            throw new Error(`Cohere API error: ${response.status}`);
-        }
-
-        const data = await response.json();
-        const generatedText = data.generations[0].text.trim();
-
-        try {
-            const jsonMatch = generatedText.match(/```json\s*([\s\S]*?)\s*```/) ||
-                             generatedText.match(/(\{[\s\S]*\})/);
-            const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : generatedText;
-            const parsed = JSON.parse(jsonStr);
-            const enhanced = parsed.parts || parsed;
-            return restorePartNumbers(partsData, enhanced);
-        } catch {
-            return enhancePartsForBOM(partsData, brand, model);
-        }
-
+        const rawText  = await callGeminiAPI(prompt, 4096);
+        const parsed   = parseJSONFromAI(rawText);
+        const enhanced = parsed.parts || parsed;
+        return restorePartNumbers(partsData, enhanced);
     } catch (error) {
         console.error('BOM enhancement error:', error);
         return enhancePartsForBOM(partsData, brand, model);
@@ -417,83 +328,52 @@ Return ONLY valid JSON — no markdown, no explanation:
 // VERRIJK PARTS VOOR RSPL
 // ══════════════════════════════════════════════════════════════════════════════
 async function analyzeForRSPL(partsData, brand, model) {
-    const apiKey = AppState.apiKeys.cohere;
+    const partsMinimal = partsData.map(p => ({
+        partNumber: p.partNumber || '',
+        name:       p.name || '',
+        type:       p.type || 'Pr',
+        critical:   p.critical || false,
+        quantity:   p.quantity || 1
+    }));
 
-    if (!apiKey) {
-        console.warn('No API key, using default RSPL calculations');
-        return enhancePartsForRSPL(partsData, brand, model);
-    }
+    const prompt = `Je bent een expert in maritieme spare parts planning voor schepen.
 
-    const prompt = `You are an expert in maritime spare parts planning for ships.
+Bepaal aanbevolen voorraadhoeveelheden voor scheepsoperaties voor spare parts van ${brand} ${model}.
+KRITIEKE REGEL: Bewaar de originele "partNumber" waarden exact — wijzig ze NOOIT.
 
-Brand: ${brand}
-Model: ${model}
+Onderdelen:
+${JSON.stringify(partsMinimal)}
 
-Given the following spare parts, determine recommended quantities for ship operations.
+Voeg toe aan elk onderdeel:
+- recommendedQty2yr (integer: aanbevolen voor 0-2 jaar)
+- recommendedQty6yr (integer: aanbevolen voor 0-6 jaar incl. 1e revisie)
+- reasonForSelection (specifieke reden, bijv. "High failure rate in steam environment")
+- specialStorage (Y / N)
+- requiredForHAT (Y / N)
+- minSalesQty (integer)
+- standardPackageQty (integer)
 
-CRITICAL RULE: You must PRESERVE the existing "partNumber" and "oemPartNumber" values exactly as provided.
-Do NOT change, replace, or invent part numbers. Only add the new fields listed below.
+Richtlijnen:
+- Cr kritiek: qty2yr=2-3, qty6yr=6-9
+- Con: qty2yr=8-12, qty6yr=24-36
+- Pr kritiek: qty2yr=2, qty6yr=6
+- Pr normaal: qty2yr=1, qty6yr=3
 
-${JSON.stringify(partsData, null, 2)}
-
-Add these fields to each part (keep all existing fields unchanged):
-- recommendedQty2yr     (integer: recommended quantity for 0-2 years)
-- recommendedQty6yr     (integer: recommended quantity for 0-6 years including first overhaul)
-- reasonForSelection    (short reason string — be specific: e.g. "High failure rate in steam environment", "Critical for cooking function")
-- specialStorage        (Y / N)
-- requiredForHAT        (Y / N — required for HAT/SAT including transit)
-- minSalesQty           (integer, usually 1)
-- standardPackageQty    (integer)
-
-Guidelines:
-- Critical Cr parts: qty2yr = 2-3, qty6yr = 6-9
-- Consumables Con:   qty2yr = 8-12, qty6yr = 24-36
-- Preventive Pr (critical): qty2yr = 2, qty6yr = 6
-- Preventive Pr (non-critical): qty2yr = 1, qty6yr = 3
-
-Return ONLY valid JSON — no markdown, no explanation:
-{ "parts": [ { ...original fields preserved..., ...new fields added... } ] }`;
+Retourneer ALLEEN geldige JSON (geen uitleg, geen markdown):
+{ "parts": [ { ...alle originele velden ongewijzigd..., ...nieuwe velden... } ] }`;
 
     try {
-        const response = await fetch(COHERE_API_URL, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                model: 'command-r',
-                prompt: prompt,
-                max_tokens: 4000,
-                temperature: 0.2
-            })
-        });
-
-        if (!response.ok) {
-            throw new Error(`Cohere API error: ${response.status}`);
-        }
-
-        const data = await response.json();
-        const generatedText = data.generations[0].text.trim();
-
-        try {
-            const jsonMatch = generatedText.match(/```json\s*([\s\S]*?)\s*```/) ||
-                             generatedText.match(/(\{[\s\S]*\})/);
-            const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : generatedText;
-            const parsed = JSON.parse(jsonStr);
-            const enhanced = parsed.parts || parsed;
-            return restorePartNumbers(partsData, enhanced);
-        } catch {
-            return enhancePartsForRSPL(partsData, brand, model);
-        }
-
+        const rawText  = await callGeminiAPI(prompt, 4096);
+        const parsed   = parseJSONFromAI(rawText);
+        const enhanced = parsed.parts || parsed;
+        return restorePartNumbers(partsData, enhanced);
     } catch (error) {
         console.error('RSPL enhancement error:', error);
         return enhancePartsForRSPL(partsData, brand, model);
     }
 }
 
-// ── Veiligheidsnet: herstel originele onderdeelnummers na AI-verrijking ──────
+// ── Herstel originele onderdeelnummers ───────────────────────────────────────
 function restorePartNumbers(originalParts, enhancedParts) {
     return enhancedParts.map((enhanced, i) => {
         const original = originalParts[i] || {};
@@ -506,16 +386,14 @@ function restorePartNumbers(originalParts, enhancedParts) {
     });
 }
 
-// Fallback: Enhance parts data for BOM without AI
+// ── Fallback BOM verrijking zonder AI ───────────────────────────────────────
 function enhancePartsForBOM(parts, brand, model) {
-    const manufacturers = ['Siemens', 'Bosch', 'Electrolux', 'Rational', 'Convotherm'];
-    const countries     = ['DE', 'NL', 'IT', 'FR', 'SE'];
-    const unitsOfIssue  = ['EA', 'SET', 'PC', 'KG', 'M'];
-    const repairLevels  = ['OLM', 'ILM', 'DLM'];
-
+    const countries    = ['DE', 'NL', 'IT', 'FR', 'SE'];
+    const unitsOfIssue = ['EA', 'SET', 'PC', 'KG', 'M'];
+    const repairLevels = ['OLM', 'ILM', 'DLM'];
     return parts.map(part => ({
         ...part,
-        manufacturer:    part.manufacturer    || brand || manufacturers[Math.floor(Math.random() * manufacturers.length)],
+        manufacturer:    part.manufacturer    || brand,
         cageCode:        part.cageCode        || Math.random().toString(36).substr(2, 5).toUpperCase(),
         unitOfIssue:     part.unitOfIssue     || unitsOfIssue[Math.floor(Math.random() * unitsOfIssue.length)],
         unitPrice:       part.unitPrice       || (Math.random() * 500 + 50).toFixed(2),
@@ -529,33 +407,20 @@ function enhancePartsForBOM(parts, brand, model) {
     }));
 }
 
-// Fallback: Enhance parts data for RSPL without AI
+// ── Fallback RSPL verrijking zonder AI ──────────────────────────────────────
 function enhancePartsForRSPL(parts, brand, model) {
     const reasons = {
         'Cr':  'Critical for operation — equipment stops without this part',
         'Con': 'Consumable item — regular replacement required',
         'Pr':  'Preventive maintenance — scheduled replacement'
     };
-
     return parts.map(part => {
         let qty2yr, qty6yr;
-
         switch (part.type) {
-            case 'Cr':
-                qty2yr = part.critical ? 3 : 2;
-                qty6yr = part.critical ? 9 : 6;
-                break;
-            case 'Con':
-                qty2yr = 8;
-                qty6yr = 24;
-                break;
-            case 'Pr':
-            default:
-                qty2yr = part.critical ? 2 : 1;
-                qty6yr = part.critical ? 6 : 3;
-                break;
+            case 'Cr':  qty2yr = part.critical ? 3 : 2; qty6yr = part.critical ? 9 : 6; break;
+            case 'Con': qty2yr = 8; qty6yr = 24; break;
+            default:    qty2yr = part.critical ? 2 : 1; qty6yr = part.critical ? 6 : 3; break;
         }
-
         return {
             ...part,
             recommendedQty2yr:  qty2yr,

@@ -95,7 +95,7 @@ async function handlePdfUpload(file) {
             // AI mislukt → probeer regex-fallback
             console.warn('AI analysis failed, trying regex fallback:', aiError.message);
             showNotification(
-                'AI-analyse mislukt. Poging met tekst-herkenning...',
+                'Claude analyse mislukt. Poging met tekst-herkenning...',
                 'warning'
             );
             parts = parsePartsList(extractedText);
